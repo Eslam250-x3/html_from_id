@@ -394,6 +394,99 @@ export async function generateExportHTML(
                 <link rel="icon" href="https://contents.nagwa.com/content/images/favicon.png" type="image/png" />
                 <link href="https://contents.nagwa.com/content/styles/app-min.637857909358239378.css" rel="stylesheet" />
                 <link href="https://contents.nagwa.com/content/styles/plyr-min.637845694981855899.css" rel="stylesheet" />
+
+                <!-- MathLive for <math-field> rendering -->
+                <script src="https://unpkg.com/mathlive@0.101.0/dist/mathlive-static.min.js"></script>
+                <link rel="stylesheet" href="https://unpkg.com/mathlive@0.101.0/dist/mathlive-static.min.css" />
+
+                <style>
+                    /* ===== Blank-line / Gap Span ===== */
+                    span[data-node-type="blank-line"] {
+                        display: inline-block;
+                        min-width: 80px;
+                        border-bottom: 2px solid #333;
+                        margin: 0 4px;
+                        text-align: center;
+                        vertical-align: baseline;
+                    }
+                    span[data-node-type="blank-line"][data-node-variation="gap"] {
+                        min-width: 100px;
+                        padding: 2px 8px;
+                    }
+
+                    /* ===== Math / LaTeX Spans ===== */
+                    .LexicalTheme__math-inline {
+                        display: inline-block;
+                        vertical-align: middle;
+                        margin: 0 2px;
+                    }
+                    .LexicalTheme__math-block {
+                        display: block;
+                        text-align: center;
+                        margin: 10px 0;
+                    }
+                    math-field {
+                        display: inline-block;
+                        vertical-align: middle;
+                        border: none;
+                        outline: none;
+                        background: transparent;
+                        font-size: inherit;
+                    }
+                    math-field[read-only] {
+                        pointer-events: none;
+                    }
+
+                    /* ===== Audio Wrapper Span ===== */
+                    span.audio-wrapper,
+                    span[data-node-type="audio"] {
+                        display: inline-block;
+                        vertical-align: middle;
+                        margin: 4px 0;
+                    }
+                    span.audio-wrapper audio,
+                    span[data-node-type="audio"] audio {
+                        max-width: 300px;
+                        height: 36px;
+                    }
+
+                    /* ===== RTL / LTR Text Direction Spans ===== */
+                    .LexicalTheme__text-rtl {
+                        direction: rtl;
+                        unicode-bidi: embed;
+                        text-align: right;
+                    }
+                    .LexicalTheme__text-ltr {
+                        direction: ltr;
+                        unicode-bidi: embed;
+                        text-align: left;
+                    }
+                    span[dir="rtl"] {
+                        direction: rtl;
+                        unicode-bidi: embed;
+                    }
+                    span[dir="ltr"] {
+                        direction: ltr;
+                        unicode-bidi: embed;
+                    }
+
+                    /* ===== Formatting / Pre-wrap Spans ===== */
+                    span[style*="white-space: pre-wrap"] {
+                        white-space: pre-wrap !important;
+                    }
+
+                    /* ===== Editor Keywords (should not appear, but hide just in case) ===== */
+                    .editor-keyword {
+                        display: none !important;
+                    }
+
+                    /* ===== LexicalTheme Paragraph ===== */
+                    .LexicalTheme__paragraph {
+                        margin: 0;
+                        padding: 0;
+                        line-height: 1.8;
+                    }
+                </style>
             </head>
             <body>
 <div class="instances instances--instances-preview" id="questionList">
