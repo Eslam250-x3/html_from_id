@@ -6,8 +6,8 @@ interface QuestionRendererProps {
     onStatusChange: (id: string, status: 'loading' | 'loaded' | 'error') => void;
 }
 
-const ENGINE_URL = 'https://beta-classes-resources.nagwa.com/engines/unzipped/nagwa_questions_engine/index.html';
-const BASE_URL = 'https://s3.us-east-1.amazonaws.com/beta-qms.nagwa.com/questions';
+const ENGINE_URL = 'https://classes-resources.nagwa.com/engines/unzipped/nagwa_questions_engine/index.html';
+const BASE_URL = '/api/questions';
 
 export default function QuestionRenderer({ questionId, index, onStatusChange }: QuestionRendererProps) {
     const containerRef = useRef<HTMLDivElement>(null);

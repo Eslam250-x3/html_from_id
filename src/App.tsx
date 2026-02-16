@@ -57,10 +57,10 @@ export default function App() {
         setExporting(true);
         setExportProgress({ loaded: 0, total: questionIds.length });
         try {
-            const html = await generateExportHTML(questionIds, (loaded, total) => {
+            const result = await generateExportHTML(questionIds, (loaded, total) => {
                 setExportProgress({ loaded, total });
             });
-            const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+            const blob = new Blob([result.html], { type: 'text/html;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -69,7 +69,15 @@ export default function App() {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            showToast('📄 HTML file exported successfully!', 'success');
+
+            if (result.failedIds.length > 0) {
+                showToast(
+                    `📄 Exported ${result.successCount}/${questionIds.length} questions. ${result.failedIds.length} failed (403 - not accessible).`,
+                    result.successCount > 0 ? 'success' : 'error'
+                );
+            } else {
+                showToast(`📄 Exported all ${result.successCount} questions successfully!`, 'success');
+            }
         } catch (err) {
             showToast(err instanceof Error ? err.message : 'Export failed', 'error');
         } finally {
@@ -91,7 +99,10 @@ export default function App() {
     return (
         <div className="app-container">
             <header className="app-header">
-                <h1>📝 Question Renderer</h1>
+                <h1>
+                    <img src="https://contents.nagwa.com/content/images/nagwa-logo-white.svg" alt="Nagwa" style={{ height: '32px', verticalAlign: 'middle', marginRight: '10px' }} />
+                    Question Renderer
+                </h1>
                 <p>Upload a CSV file with question IDs to render and export questions</p>
             </header>
 
