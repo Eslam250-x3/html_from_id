@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/questionrenderer.tsx","./src/utils/csvparser.ts","./src/utils/htmlexporter.ts"],"version":"5.6.3"}

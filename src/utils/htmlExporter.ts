@@ -512,6 +512,27 @@ export async function generateExportHTML(
                         direction: ltr;
                         text-align: left;
                     }
+
+                    /* ===== MCQ / Choices Styling ===== */
+                    .mcq_choices {
+                        list-style: none;
+                        padding: 0;
+                        margin: 15px 0;
+                    }
+                    .mcq_choices li {
+                        display: flex;
+                        align-items: flex-start;
+                        margin-bottom: 12px;
+                        gap: 12px;
+                    }
+                    /* Ensure label doesn't shrink */
+                    .mcq_choices li > span {
+                        flex-shrink: 0;
+                    }
+                    /* Reset paragraph margins inside choices for better alignment */
+                    .mcq_choices li p {
+                        margin: 0 !important;
+                    }
                 </style>
             </head>
             <body>
