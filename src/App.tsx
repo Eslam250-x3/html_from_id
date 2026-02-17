@@ -10,7 +10,7 @@ export default function App() {
     const [statuses, setStatuses] = useState<Record<string, QuestionStatus>>({});
     const [dragOver, setDragOver] = useState(false);
     const [exporting, setExporting] = useState(false);
-    const [exportProgress, setExportProgress] = useState({ loaded: 0, total: 0 });
+    const [exportProgress, setExportProgress] = useState({ loaded: 0, total: 0, phase: '' });
     const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -55,16 +55,15 @@ export default function App() {
 
     const handleExport = async () => {
         setExporting(true);
-        setExportProgress({ loaded: 0, total: questionIds.length });
+        setExportProgress({ loaded: 0, total: questionIds.length, phase: 'questions' });
         try {
-            const result = await generateExportHTML(questionIds, (loaded, total) => {
-                setExportProgress({ loaded, total });
+            const result = await generateExportHTML(questionIds, (loaded, total, phase) => {
+                setExportProgress({ loaded, total, phase });
             });
-            const blob = new Blob([result.html], { type: 'text/html;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
+            const url = URL.createObjectURL(result.blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'Questions_Export.html';
+            a.download = 'Questions_Export.zip';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -72,11 +71,11 @@ export default function App() {
 
             if (result.failedIds.length > 0) {
                 showToast(
-                    `📄 Exported ${result.successCount}/${questionIds.length} questions. ${result.failedIds.length} failed (403 - not accessible).`,
+                    `📦 Exported ${result.successCount}/${questionIds.length} questions with images. ${result.failedIds.length} failed.`,
                     result.successCount > 0 ? 'success' : 'error'
                 );
             } else {
-                showToast(`📄 Exported all ${result.successCount} questions successfully!`, 'success');
+                showToast(`📦 Exported all ${result.successCount} questions with images!`, 'success');
             }
         } catch (err) {
             showToast(err instanceof Error ? err.message : 'Export failed', 'error');
@@ -164,10 +163,10 @@ export default function App() {
                     {/* Controls */}
                     <div className="controls-bar">
                         <button className="btn btn-success" onClick={handleExport} disabled={exporting}>
-                            <span className="btn-icon">{exporting ? '⏳' : '📄'}</span>
+                            <span className="btn-icon">{exporting ? '⏳' : '📦'}</span>
                             {exporting
-                                ? `Fetching ${exportProgress.loaded}/${exportProgress.total}...`
-                                : 'Export as HTML'}
+                                ? `${exportProgress.phase === 'questions' ? 'Questions' : 'Images'}: ${exportProgress.loaded}/${exportProgress.total}...`
+                                : 'Export as ZIP (with images)'}
                         </button>
                         <button className="btn btn-secondary" onClick={handleReset}>
                             <span className="btn-icon">🔄</span>

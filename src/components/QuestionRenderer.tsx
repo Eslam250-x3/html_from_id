@@ -48,6 +48,8 @@ export default function QuestionRenderer({ questionId, index, onStatusChange }: 
                             question: questionJson,
                             assetsBasePath: basePath,
                             mode: 'session_tutor',
+                            locale: questionJson.language_code || 'en',
+                            direction: questionJson.language_code === 'ar' ? 'rtl' : 'ltr',
                         },
                     }),
                     '*'

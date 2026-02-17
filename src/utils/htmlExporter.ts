@@ -1,4 +1,7 @@
+import JSZip from 'jszip';
+
 const BASE_URL = '/api/questions';
+const S3_BASE = '/api/questions';
 
 // Arabic label → HTML entity mapping
 const LABEL_ENTITY_MAP: Record<string, string> = {
@@ -304,6 +307,27 @@ function renderAnswers(part: QuestionPart, dir: string): string {
   }
 }
 
+function rewriteImagePaths(html: string, questionId: string): string {
+  // Rewrite relative img src to images/{questionId}/{filename}
+  return html.replace(/(<img[^>]*\ssrc\s*=\s*")([^"]*\.(?:svg|png|jpg|jpeg|gif|webp))(")/gi, (match, pre, src, post) => {
+    // Skip absolute URLs
+    if (/^https?:\/\//.test(src) || src.startsWith('images/')) return match;
+    return `${pre}images/${questionId}/${src}${post}`;
+  });
+}
+
+function collectImagePaths(html: string): string[] {
+  const imgs: string[] = [];
+  const regex = /src\s*=\s*"([^"]*\.(?:svg|png|jpg|jpeg|gif|webp))"/gi;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(html)) !== null) {
+    if (!/^https?:\/\//.test(m[1])) {
+      imgs.push(m[1]);
+    }
+  }
+  return imgs;
+}
+
 function generateQuestionHTML(question: QuestionJSON): string {
   const dir = question.language_code === 'ar' ? 'rtl' : 'ltr';
   const dirClass = `dir-${dir}`;
@@ -312,7 +336,7 @@ function generateQuestionHTML(question: QuestionJSON): string {
   const wrapperClass = isMultiPart ? 'multi-parts-question' : 'one-part-question';
 
   const partsHTML = question.content.parts.map((part) => {
-    const stemHTML = addLexicalClass(part.stem, dir);
+    const stemHTML = rewriteImagePaths(addLexicalClass(part.stem, dir), qId);
     const answersHTML = renderAnswers(part, dir);
     const partLabel = isMultiPart
       ? `\n                    <div class="part-number"><p>Part ${part.n}</p></div>` : '';
@@ -347,18 +371,19 @@ ${partsHTML}
 // ─── Public API ───────────────────────────────────
 
 export interface ExportResult {
-  html: string;
+  blob: Blob;
   successCount: number;
   failedIds: string[];
 }
 
 export async function generateExportHTML(
   questionIds: string[],
-  onProgress?: (loaded: number, total: number) => void
+  onProgress?: (loaded: number, total: number, phase: string) => void
 ): Promise<ExportResult> {
   const questions: QuestionJSON[] = [];
   const failedIds: string[] = [];
 
+  // Phase 1: Fetch question JSON
   for (let i = 0; i < questionIds.length; i++) {
     const id = questionIds[i];
     const basePath = `${BASE_URL}/${id}`;
@@ -367,7 +392,7 @@ export async function generateExportHTML(
       if (!response.ok) {
         console.warn(`Failed to fetch question ${id}: ${response.status}`);
         failedIds.push(id);
-        onProgress?.(i + 1, questionIds.length);
+        onProgress?.(i + 1, questionIds.length, 'questions');
         continue;
       }
       const json: QuestionJSON = await response.json();
@@ -376,7 +401,7 @@ export async function generateExportHTML(
       console.warn(`Error fetching question ${id}:`, err);
       failedIds.push(id);
     }
-    onProgress?.(i + 1, questionIds.length);
+    onProgress?.(i + 1, questionIds.length, 'questions');
   }
 
   const questionDivs = questions.map((q) => generateQuestionHTML(q)).join('\n');
@@ -395,9 +420,9 @@ export async function generateExportHTML(
                 <link href="https://contents.nagwa.com/content/styles/app-min.637857909358239378.css" rel="stylesheet" />
                 <link href="https://contents.nagwa.com/content/styles/plyr-min.637845694981855899.css" rel="stylesheet" />
 
-                <!-- MathLive for <math-field> rendering -->
-                <script src="https://unpkg.com/mathlive@0.101.0/dist/mathlive-static.min.js"></script>
-                <link rel="stylesheet" href="https://unpkg.com/mathlive@0.101.0/dist/mathlive-static.min.css" />
+                <!-- KaTeX for math rendering -->
+                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+                <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"><\/script>
 
                 <style>
                     /* ===== Blank-line / Gap Span ===== */
@@ -415,26 +440,17 @@ export async function generateExportHTML(
                     }
 
                     /* ===== Math / LaTeX Spans ===== */
+                    .LexicalTheme__math--inline,
                     .LexicalTheme__math-inline {
                         display: inline-block;
                         vertical-align: middle;
                         margin: 0 2px;
                     }
+                    .LexicalTheme__math--block,
                     .LexicalTheme__math-block {
                         display: block;
                         text-align: center;
                         margin: 10px 0;
-                    }
-                    math-field {
-                        display: inline-block;
-                        vertical-align: middle;
-                        border: none;
-                        outline: none;
-                        background: transparent;
-                        font-size: inherit;
-                    }
-                    math-field[read-only] {
-                        pointer-events: none;
                     }
 
                     /* ===== Audio Wrapper Span ===== */
@@ -486,17 +502,81 @@ export async function generateExportHTML(
                         padding: 0;
                         line-height: 1.8;
                     }
+
+                    /* ===== Direction Classes ===== */
+                    .dir-rtl {
+                        direction: rtl;
+                        text-align: right;
+                    }
+                    .dir-ltr {
+                        direction: ltr;
+                        text-align: left;
+                    }
                 </style>
             </head>
             <body>
 <div class="instances instances--instances-preview" id="questionList">
 ${questionDivs}
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('math-field').forEach(function(mf) {
+        var latex = mf.getAttribute('value') || mf.textContent || '';
+        if (!latex.trim()) return;
+        var span = document.createElement('span');
+        span.className = 'katex-rendered';
+        try {
+            katex.render(latex, span, {
+                throwOnError: false,
+                displayMode: mf.closest('[data-node-variation="block"]') !== null ||
+                              mf.closest('.LexicalTheme__math--block') !== null ||
+                              mf.closest('.LexicalTheme__math-block') !== null
+            });
+        } catch(e) {
+            span.textContent = latex;
+        }
+        mf.parentNode.replaceChild(span, mf);
+    });
+});
+<\/script>
 </body></html>
 `;
 
+  // Phase 2: Collect all image paths from the generated HTML
+  const imagePaths = collectImagePaths(html);
+  const zip = new JSZip();
+  zip.file('Questions_Export.html', html);
+
+  // Phase 3: Download images and add to ZIP
+  if (imagePaths.length > 0) {
+    let downloaded = 0;
+    const imagePromises = imagePaths.map(async (imgPath) => {
+      // imgPath is like "images/217151435842/217151435842.01.svg"
+      const parts = imgPath.split('/');
+      const questionId = parts[1];
+      const filename = parts[2];
+      const imageUrl = `${S3_BASE}/${questionId}/${filename}`;
+      try {
+        const resp = await fetch(imageUrl);
+        if (resp.ok) {
+          const blob = await resp.blob();
+          zip.file(imgPath, blob);
+        } else {
+          console.warn(`Failed to download image ${imageUrl}: ${resp.status}`);
+        }
+      } catch (err) {
+        console.warn(`Error downloading image ${imageUrl}:`, err);
+      }
+      downloaded++;
+      onProgress?.(downloaded, imagePaths.length, 'images');
+    });
+    await Promise.all(imagePromises);
+  }
+
+  const blob = await zip.generateAsync({ type: 'blob' });
+
   return {
-    html,
+    blob,
     successCount: questions.length,
     failedIds,
   };
