@@ -54,6 +54,11 @@ export default function App() {
     }, []);
 
     const handleExport = async () => {
+        if (questionIds.length === 0) {
+            showToast('No questions to export', 'error');
+            return;
+        }
+
         setExporting(true);
         setExportProgress({ loaded: 0, total: questionIds.length, phase: 'questions' });
         try {
@@ -69,9 +74,16 @@ export default function App() {
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
 
-            if (result.failedIds.length > 0) {
+            const failedQuestionCount = result.failedIds.length;
+            const failedImageCount = result.failedImagePaths.length;
+
+            if (failedQuestionCount > 0 || failedImageCount > 0) {
+                const failures: string[] = [];
+                if (failedQuestionCount > 0) failures.push(`${failedQuestionCount} questions`);
+                if (failedImageCount > 0) failures.push(`${failedImageCount} images`);
+
                 showToast(
-                    `📦 Exported ${result.successCount}/${questionIds.length} questions with images. ${result.failedIds.length} failed.`,
+                    `📦 Exported ${result.successCount}/${questionIds.length} questions. Failed: ${failures.join(' and ')}.`,
                     result.successCount > 0 ? 'success' : 'error'
                 );
             } else {
@@ -180,7 +192,7 @@ export default function App() {
                         <div className="questions-grid">
                             {questionIds.map((id, i) => (
                                 <QuestionRenderer
-                                    key={id}
+                                    key={`${id}-${i}`}
                                     questionId={id}
                                     index={i}
                                     onStatusChange={handleStatusChange}

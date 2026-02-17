@@ -7,26 +7,43 @@ interface QuestionRendererProps {
 }
 
 const ENGINE_URL = 'https://classes-resources.nagwa.com/engines/unzipped/nagwa_questions_engine/index.html';
+const ENGINE_ORIGIN = new URL(ENGINE_URL).origin;
 const BASE_URL = '/api/questions';
+type RendererStatus = 'loading' | 'loaded' | 'error';
+
+function parseMessageData(data: unknown): Record<string, unknown> | null {
+    const parsed = typeof data === 'string' ? (() => {
+        try {
+            return JSON.parse(data);
+        } catch {
+            return null;
+        }
+    })() : data;
+
+    if (!parsed || typeof parsed !== 'object') {
+        return null;
+    }
+
+    return parsed as Record<string, unknown>;
+}
 
 export default function QuestionRenderer({ questionId, index, onStatusChange }: QuestionRendererProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const [height, setHeight] = useState(250);
     const [error, setError] = useState<string | null>(null);
-    const initRef = useRef(false);
+    const [status, setStatus] = useState<RendererStatus>('loading');
 
     useEffect(() => {
-        if (initRef.current) return;
-        initRef.current = true;
-
         const container = containerRef.current;
         if (!container) return;
 
-        onStatusChange(questionId, 'loading');
-
+        const controller = new AbortController();
         const basePath = `${BASE_URL}/${questionId}`;
-        const jsonPromise = fetch(`${basePath}/${questionId}.json`);
+
+        setError(null);
+        setStatus('loading');
+        onStatusChange(questionId, 'loading');
 
         const iframe = document.createElement('iframe');
         iframeRef.current = iframe;
@@ -37,9 +54,10 @@ export default function QuestionRenderer({ questionId, index, onStatusChange }: 
 
         iframe.onload = async () => {
             try {
-                const resp = await jsonPromise;
+                const resp = await fetch(`${basePath}/${questionId}.json`, { signal: controller.signal });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const questionJson = await resp.json();
+                if (controller.signal.aborted) return;
 
                 iframe.contentWindow?.postMessage(
                     JSON.stringify({
@@ -52,11 +70,14 @@ export default function QuestionRenderer({ questionId, index, onStatusChange }: 
                             direction: questionJson.language_code === 'ar' ? 'rtl' : 'ltr',
                         },
                     }),
-                    '*'
+                    ENGINE_ORIGIN
                 );
+                setStatus('loaded');
                 onStatusChange(questionId, 'loaded');
             } catch (err) {
+                if (controller.signal.aborted) return;
                 setError(err instanceof Error ? err.message : 'Unknown error');
+                setStatus('error');
                 onStatusChange(questionId, 'error');
             }
         };
@@ -65,34 +86,49 @@ export default function QuestionRenderer({ questionId, index, onStatusChange }: 
         container.appendChild(iframe);
 
         return () => {
-            // cleanup handled by React unmount
+            controller.abort();
+            iframe.onload = null;
+            iframe.remove();
+            iframeRef.current = null;
         };
-    }, [questionId]);
+    }, [questionId, onStatusChange]);
 
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (['questionRendered', 'questionHeightChanged'].includes(data.messageKey)) {
-                    if (data.questionId === questionId && data.questionHeight) {
-                        const newH = Number(data.questionHeight);
-                        setHeight(newH);
-                        if (iframeRef.current) {
-                            iframeRef.current.style.height = `${newH}px`;
-                        }
-                    }
+            const iframeWindow = iframeRef.current?.contentWindow;
+            if (!iframeWindow) return;
+            if (event.source !== iframeWindow) return;
+            if (event.origin !== ENGINE_ORIGIN) return;
+
+            const data = parseMessageData(event.data);
+            if (!data) return;
+
+            const messageKey = typeof data.messageKey === 'string' ? data.messageKey : '';
+            if (!['questionRendered', 'questionHeightChanged'].includes(messageKey)) return;
+
+            const messageQuestionId = String(data.questionId ?? '');
+            if (messageQuestionId && messageQuestionId !== questionId) return;
+
+            const newH = Number(data.questionHeight);
+            if (Number.isFinite(newH) && newH > 0) {
+                setHeight(newH);
+                if (iframeRef.current) {
+                    iframeRef.current.style.height = `${newH}px`;
                 }
-            } catch {
-                // ignore non-JSON messages
+            }
+
+            if (messageKey === 'questionRendered') {
+                setStatus((prev) => (prev === 'error' ? prev : 'loaded'));
+                onStatusChange(questionId, 'loaded');
             }
         };
 
         window.addEventListener('message', handleMessage);
         return () => window.removeEventListener('message', handleMessage);
-    }, [questionId]);
+    }, [questionId, onStatusChange]);
 
-    const statusClass = error ? 'status-error' : 'status-loading';
-    const statusText = error ? `Error: ${error}` : 'Loading...';
+    const statusClass = status === 'error' ? 'status-error' : status === 'loaded' ? 'status-loaded' : 'status-loading';
+    const statusText = status === 'error' ? `Error: ${error}` : status === 'loaded' ? 'Loaded' : 'Loading...';
 
     return (
         <div className="question-card">

@@ -2,6 +2,8 @@ import JSZip from 'jszip';
 
 const BASE_URL = '/api/questions';
 const S3_BASE = '/api/questions';
+const QUESTION_FETCH_CONCURRENCY = 6;
+const IMAGE_FETCH_CONCURRENCY = 10;
 
 // Arabic label → HTML entity mapping
 const LABEL_ENTITY_MAP: Record<string, string> = {
@@ -10,6 +12,7 @@ const LABEL_ENTITY_MAP: Record<string, string> = {
   'ج': '&#x62C;',
   'د': '&#x62F;',
   'هـ': '&#x647;',
+  'ه': '&#x647;',
   'و': '&#x648;',
   'A': 'A',
   'B': 'B',
@@ -112,32 +115,42 @@ function getLabelEntity(label: string): string {
   return LABEL_ENTITY_MAP[label] || `${label}`;
 }
 
+function wrapChoiceValue(valueHtml: string, dir: string): string {
+  const rawValue = String(valueHtml ?? '').trim();
+  const valueWithLexicalClass = addLexicalClass(rawValue, dir).trim();
+  const normalizedValue = /<\s*p\b/i.test(valueWithLexicalClass)
+    ? valueWithLexicalClass
+    : `<p class="LexicalTheme__paragraph" dir="${dir}">${valueWithLexicalClass}</p>`;
+
+  return `<div class="choice-value" dir="${dir}">${normalizedValue}</div>`;
+}
+
+function renderChoiceItem(label: string, labelClass: string, valueHtml: string, dir: string): string {
+  return `                <li class="">
+                    <span class="${labelClass}">
+                        ${label}
+                    </span>
+                    ${wrapChoiceValue(valueHtml, dir)}
+                </li>`;
+}
+
 // ─── Renderers per question type ──────────────────
 
-function renderStringAnswer(part: QuestionPart): string {
+function renderStringAnswer(part: QuestionPart, dir: string): string {
   const answer = part.acceptable_answers?.[0] || '';
   return `
         <ul class="mcq_choices">
-                <li class="">
-                    <span class="answered correct">
-                        &#x623;
-                    </span>${answer}
-                </li>
+${renderChoiceItem('&#x623;', 'answered correct', answer, dir)}
         </ul>
 `;
 }
 
 function renderMCQAnswer(part: QuestionPart, dir: string): string {
   if (!part.choices?.length) return '';
-  const items = part.choices.map((c) => {
-    const entity = getLabelEntity(c.label);
-    const cls = c.is_correct ? 'not_active answered correct' : 'not_active';
-    const val = addLexicalClass(c.value, dir);
-    return `                <li class="">
-                    <span class="${cls}">
-                        ${entity}
-                    </span>${val}
-                </li>`;
+  const items = part.choices.map((choice) => {
+    const entity = getLabelEntity(choice.label);
+    const cls = choice.is_correct ? 'not_active answered correct' : 'not_active';
+    return renderChoiceItem(entity, cls, choice.value, dir);
   }).join('\n');
   return `
     <ul class="mcq_choices">
@@ -176,12 +189,9 @@ function renderInputAnswer(part: QuestionPart): string {
 
 function renderGapAnswer(part: QuestionPart, dir: string): string {
   if (!part.gap_keys?.length) return '';
-  // Show the gap keys in correct order
   const sorted = [...part.gap_keys].sort((a, b) => a.correct_order - b.correct_order);
-  const items = sorted.map((gk, i) =>
-    `                <li class="">
-                    <span class="answered correct">${i + 1}</span>${gk.value}
-                </li>`
+  const items = sorted.map((gapKey, index) =>
+    renderChoiceItem(String(index + 1), 'answered correct', gapKey.value, dir)
   ).join('\n');
   return `
         <ul class="mcq_choices">
@@ -190,13 +200,11 @@ ${items}
 `;
 }
 
-function renderOrderingAnswer(part: QuestionPart): string {
+function renderOrderingAnswer(part: QuestionPart, dir: string): string {
   const ca = part.correct_answer;
   if (!Array.isArray(ca)) return '';
-  const items = (ca as string[]).map((val, i) =>
-    `                <li class="">
-                    <span class="answered correct">${i + 1}</span>${val}
-                </li>`
+  const items = (ca as string[]).map((value, index) =>
+    renderChoiceItem(String(index + 1), 'answered correct', value, dir)
   ).join('\n');
   return `
         <ol class="mcq_choices">
@@ -224,17 +232,13 @@ ${rows}
 }
 
 function renderGMRQAnswer(part: QuestionPart, dir: string): string {
-  // GMRQ has items.A and items.B, show correct ones from each group
   const items = part.items as GmrqItems | undefined;
   if (!items) return '';
 
-  const renderGroup = (group: Choice[], label: string) => {
-    return group.map((c) => {
-      const cls = c.is_correct ? 'not_active answered correct' : 'not_active';
-      const val = addLexicalClass(c.value, dir);
-      return `                <li class="">
-                    <span class="${cls}">${getLabelEntity(c.label)}</span>${val}
-                </li>`;
+  const renderGroup = (group: Choice[]) => {
+    return group.map((choice) => {
+      const cls = choice.is_correct ? 'not_active answered correct' : 'not_active';
+      return renderChoiceItem(getLabelEntity(choice.label), cls, choice.value, dir);
     }).join('\n');
   };
 
@@ -242,11 +246,11 @@ function renderGMRQAnswer(part: QuestionPart, dir: string): string {
         <div class="gmrq-group">
             <strong>Group A:</strong>
             <ul class="mcq_choices">
-${renderGroup(items.A, 'A')}
+${renderGroup(items.A)}
             </ul>
             <strong>Group B:</strong>
             <ul class="mcq_choices">
-${renderGroup(items.B, 'B')}
+${renderGroup(items.B)}
             </ul>
         </div>
 `;
@@ -262,14 +266,10 @@ function renderCountingAnswer(part: QuestionPart): string {
 }
 
 function renderOpinionAnswer(part: QuestionPart, dir: string): string {
-  // Opinion questions show choices without correct/incorrect
   if (!part.choices?.length) return '';
-  const items = part.choices.map((c) => {
-    const entity = getLabelEntity(c.label);
-    return `                <li class="">
-                    <span class="not_active">${entity}</span>${c.value}
-                </li>`;
-  }).join('\n');
+  const items = part.choices.map((choice) =>
+    renderChoiceItem(getLabelEntity(choice.label), 'not_active', choice.value, dir)
+  ).join('\n');
   return `
     <ul class="mcq_choices">
 ${items}
@@ -291,13 +291,13 @@ function renderPuzzleAnswer(part: QuestionPart): string {
 
 function renderAnswers(part: QuestionPart, dir: string): string {
   switch (part.type) {
-    case 'string': return renderStringAnswer(part);
+    case 'string': return renderStringAnswer(part, dir);
     case 'mcq': return renderMCQAnswer(part, dir);
     case 'mrq': return renderMRQAnswer(part, dir);
     case 'frq': return renderFRQAnswer(part, dir);
     case 'input': return renderInputAnswer(part);
     case 'gap': return renderGapAnswer(part, dir);
-    case 'ordering': return renderOrderingAnswer(part);
+    case 'ordering': return renderOrderingAnswer(part, dir);
     case 'matching': return renderMatchingAnswer(part);
     case 'gmrq': return renderGMRQAnswer(part, dir);
     case 'counting': return renderCountingAnswer(part);
@@ -328,6 +328,47 @@ function collectImagePaths(html: string): string[] {
   return imgs;
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array<R>(items.length);
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+function resolveImageUrl(imgPath: string): string | null {
+  const normalizedPath = imgPath.replace(/^\/+/, '');
+  const parts = normalizedPath.split('/');
+  if (parts.length < 3 || parts[0] !== 'images') {
+    return null;
+  }
+
+  const questionId = parts[1];
+  const filename = parts.slice(2).join('/');
+  if (!questionId || !filename) {
+    return null;
+  }
+
+  return `${S3_BASE}/${questionId}/${filename}`;
+}
+
 function generateQuestionHTML(question: QuestionJSON): string {
   const dir = question.language_code === 'ar' ? 'rtl' : 'ltr';
   const dirClass = `dir-${dir}`;
@@ -337,7 +378,7 @@ function generateQuestionHTML(question: QuestionJSON): string {
 
   const partsHTML = question.content.parts.map((part) => {
     const stemHTML = rewriteImagePaths(addLexicalClass(part.stem, dir), qId);
-    const answersHTML = renderAnswers(part, dir);
+    const answersHTML = rewriteImagePaths(renderAnswers(part, dir), qId);
     const partLabel = isMultiPart
       ? `\n                    <div class="part-number"><p>Part ${part.n}</p></div>` : '';
 
@@ -374,34 +415,40 @@ export interface ExportResult {
   blob: Blob;
   successCount: number;
   failedIds: string[];
+  failedImagePaths: string[];
 }
 
 export async function generateExportHTML(
   questionIds: string[],
   onProgress?: (loaded: number, total: number, phase: string) => void
 ): Promise<ExportResult> {
-  const questions: QuestionJSON[] = [];
   const failedIds: string[] = [];
-
-  // Phase 1: Fetch question JSON
-  for (let i = 0; i < questionIds.length; i++) {
-    const id = questionIds[i];
-    const basePath = `${BASE_URL}/${id}`;
+  let processedQuestions = 0;
+  const questionResults = await mapWithConcurrency(questionIds, QUESTION_FETCH_CONCURRENCY, async (id) => {
     try {
-      const response = await fetch(`${basePath}/${id}.json`);
+      const response = await fetch(`${BASE_URL}/${id}/${id}.json`);
       if (!response.ok) {
         console.warn(`Failed to fetch question ${id}: ${response.status}`);
-        failedIds.push(id);
-        onProgress?.(i + 1, questionIds.length, 'questions');
-        continue;
+        return { id, question: null as QuestionJSON | null };
       }
-      const json: QuestionJSON = await response.json();
-      questions.push(json);
+      const question = await response.json() as QuestionJSON;
+      return { id, question };
     } catch (err) {
       console.warn(`Error fetching question ${id}:`, err);
-      failedIds.push(id);
+      return { id, question: null as QuestionJSON | null };
+    } finally {
+      processedQuestions += 1;
+      onProgress?.(processedQuestions, questionIds.length, 'questions');
     }
-    onProgress?.(i + 1, questionIds.length, 'questions');
+  });
+
+  const questions: QuestionJSON[] = [];
+  for (const result of questionResults) {
+    if (result.question) {
+      questions.push(result.question);
+    } else {
+      failedIds.push(result.id);
+    }
   }
 
   const questionDivs = questions.map((q) => generateQuestionHTML(q)).join('\n');
@@ -520,18 +567,57 @@ export async function generateExportHTML(
                         margin: 15px 0;
                     }
                     .mcq_choices li {
-                        display: flex;
-                        align-items: flex-start;
+                        display: flex !important;
+                        align-items: flex-start !important;
+                        justify-content: flex-start !important;
+                        width: 100% !important;
                         margin-bottom: 12px;
                         gap: 12px;
                     }
-                    /* Ensure label doesn't shrink */
                     .mcq_choices li > span {
-                        flex-shrink: 0;
+                        flex: 0 0 auto;
+                        min-width: 2.2em;
+                        text-align: center;
+                        overflow: visible !important;
+                        float: none !important;
+                        position: static !important;
+                        margin: 0 !important;
+                        left: auto !important;
+                        right: auto !important;
                     }
-                    /* Reset paragraph margins inside choices for better alignment */
+                    .mcq_choices li .choice-value {
+                        flex: 1 1 auto;
+                        min-width: 0;
+                    }
+                    .mcq_choices li .choice-value p {
+                        margin: 0 !important;
+                        white-space: normal;
+                        overflow-wrap: anywhere;
+                    }
                     .mcq_choices li p {
                         margin: 0 !important;
+                    }
+                    .dir-rtl .mcq_choices li {
+                        flex-direction: row !important;
+                        justify-content: flex-start !important;
+                        direction: rtl !important;
+                        text-align: right;
+                    }
+                    .dir-ltr .mcq_choices li {
+                        flex-direction: row !important;
+                        justify-content: flex-start !important;
+                        direction: ltr !important;
+                        text-align: left;
+                    }
+                    .dir-rtl .mcq_choices li .choice-value,
+                    .dir-rtl .mcq_choices li .choice-value * {
+                        direction: rtl;
+                        text-align: right;
+                    }
+                    .dir-ltr .mcq_choices li .choice-value,
+                    .dir-ltr .mcq_choices li .choice-value * {
+                        direction: ltr;
+                        text-align: left;
                     }
                 </style>
             </head>
@@ -561,37 +647,44 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 <\/script>
 </body></html>
-`;
+  `;
 
   // Phase 2: Collect all image paths from the generated HTML
-  const imagePaths = collectImagePaths(html);
+  const imagePaths = [...new Set(collectImagePaths(html))];
+  const failedImagePathSet = new Set<string>();
   const zip = new JSZip();
   zip.file('Questions_Export.html', html);
 
   // Phase 3: Download images and add to ZIP
   if (imagePaths.length > 0) {
-    let downloaded = 0;
-    const imagePromises = imagePaths.map(async (imgPath) => {
-      // imgPath is like "images/217151435842/217151435842.01.svg"
-      const parts = imgPath.split('/');
-      const questionId = parts[1];
-      const filename = parts[2];
-      const imageUrl = `${S3_BASE}/${questionId}/${filename}`;
+    let processedImages = 0;
+    await mapWithConcurrency(imagePaths, IMAGE_FETCH_CONCURRENCY, async (imgPath) => {
+      const imageUrl = resolveImageUrl(imgPath);
+      if (!imageUrl) {
+        failedImagePathSet.add(imgPath);
+        processedImages += 1;
+        onProgress?.(processedImages, imagePaths.length, 'images');
+        return null;
+      }
+
       try {
-        const resp = await fetch(imageUrl);
-        if (resp.ok) {
-          const blob = await resp.blob();
+        const response = await fetch(imageUrl);
+        if (response.ok) {
+          const blob = await response.blob();
           zip.file(imgPath, blob);
         } else {
-          console.warn(`Failed to download image ${imageUrl}: ${resp.status}`);
+          failedImagePathSet.add(imgPath);
+          console.warn(`Failed to download image ${imageUrl}: ${response.status}`);
         }
       } catch (err) {
+        failedImagePathSet.add(imgPath);
         console.warn(`Error downloading image ${imageUrl}:`, err);
+      } finally {
+        processedImages += 1;
+        onProgress?.(processedImages, imagePaths.length, 'images');
       }
-      downloaded++;
-      onProgress?.(downloaded, imagePaths.length, 'images');
+      return null;
     });
-    await Promise.all(imagePromises);
   }
 
   const blob = await zip.generateAsync({ type: 'blob' });
@@ -600,5 +693,6 @@ document.addEventListener('DOMContentLoaded', function() {
     blob,
     successCount: questions.length,
     failedIds,
+    failedImagePaths: [...failedImagePathSet],
   };
 }
